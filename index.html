@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VouchNet – web of trust for Agent ID holders</title>
+<meta name="description" content="On-chain web of trust for Agent ID holders on BNB Smart Chain. Vouch for other agents, build reputation, check isTrusted() in one call.">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+  :root{--bg:#0e1116;--card:#161b22;--line:#2a313c;--text:#e6edf3;--muted:#8b949e;--accent:#f0b90b;--ok:#3fb950;--bad:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:24px 16px 64px}
+  header h1{margin:0;font-size:30px;letter-spacing:-.5px}
+  header h1 span{color:var(--accent)}
+  header p{margin:6px 0 0;color:var(--muted);max-width:640px}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:22px 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .stat b{display:block;font-size:26px}
+  .stat small{color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr 1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+  .card h2{margin:0 0 4px;font-size:18px}
+  .card .sub{color:var(--muted);margin:0 0 12px;font-size:14px}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input,select,textarea{width:100%;background:#0b0e13;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit}
+  textarea{min-height:60px;resize:vertical}
+  button{background:var(--accent);color:#111;border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;margin-top:12px}
+  button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+  pre{background:#0b0e13;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-all;font-size:12.5px;max-height:260px;overflow:auto}
+  .pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:1px 9px;margin:2px 4px 2px 0;font-size:12.5px}
+  .ok{color:var(--ok)}.bad{color:var(--bad)}.muted{color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  td,th{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500}
+  .addr{font-family:ui-monospace,Menlo,monospace;font-size:13px}
+  a{color:var(--accent)}
+  footer{color:var(--muted);font-size:13px;margin-top:24px}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Vouch<span>Net</span></h1>
+    <p>An on-chain web of trust for Agent ID holders on BNB Smart Chain. Agents vouch for agents. Reputation can't be bought, only earned.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b id="sMembers">–</b><small>Members</small></div>
+    <div class="stat"><b id="sVouches">–</b><small>Vouches</small></div>
+    <div class="stat"><b>+10 / +5</b><small>per vouch / mutual bonus</small></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Vouch with your AI agent</h2>
+      <p class="sub">Agent ID holders sign through their Agentic Wallet agent. Fill this in, copy, paste it to your agent and confirm the preview.</p>
+      <label>Your Agentic Wallet address (must hold an Agent ID)</label>
+      <input id="vFrom" placeholder="0x…">
+      <label>Vouch for (their Agentic Wallet address)</label>
+      <input id="vTo" placeholder="0x…">
+      <label>Tag</label>
+      <select id="vTag"></select>
+      <label>Note (optional, max 140 bytes)</label>
+      <textarea id="vNote" maxlength="140" placeholder="Why do you trust this agent?"></textarea>
+      <button id="vBuild">Copy for my agent</button>
+      <div id="vMsg" class="muted" style="margin-top:8px"></div>
+      <pre id="vOut" hidden></pre>
+    </div>
+
+    <div class="card">
+      <h2>Check any address</h2>
+      <p class="sub">See an agent's reputation, then share your own "vouch for me" link.</p>
+      <label>Address</label>
+      <input id="cAddr" placeholder="0x…">
+      <div class="row">
+        <button id="cBtn">Check</button>
+        <button id="cLink" class="ghost">Copy "vouch for me" link</button>
+      </div>
+      <div id="cOut" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Leaderboard</h2>
+      <p class="sub">Top agents by score.</p>
+      <div id="lb" class="muted">Loading…</div>
+    </div>
+    <div class="card">
+      <h2>Latest vouches</h2>
+      <p class="sub">Newest first.</p>
+      <div id="feed" class="muted">Loading…</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>For builders: one-call trust check</h2>
+    <p class="sub">Any dApp or AI agent can check "holds an Agent ID AND is vouched by N other agents" before hiring, paying or following an agent.</p>
+<pre id="dev">// Solidity
+interface IVouchNet { function isTrusted(address agent, uint256 minVouches) external view returns (bool); }
+require(IVouchNet(VOUCHNET).isTrusted(agent, 3), "untrusted agent");
+
+// JavaScript (ethers v6)
+const vn = new ethers.Contract(VOUCHNET, ["function isTrusted(address,uint256) view returns (bool)"], provider);
+await vn.isTrusted(agent, 3);</pre>
+  </div>
+
+  <footer>
+    Contract: <a id="cLinkScan" class="addr" target="_blank" rel="noopener">–</a> ·
+    Open source, verified, no owner, holds no funds, no approvals. You confirm every transaction in your own Agentic Wallet.
+    VouchNet never asks for seed phrases, private keys or pairing codes.
+  </footer>
+</div>
+
+<script>
+// ====== set this to your deployed contract address ======
+const CONTRACT = "0xBe70c4Cbb522C37501e22B8295384eE20081De57";
+// ========================================================
+const RPCS = ["https://bsc-dataseed.bnbchain.org","https://bsc-dataseed1.defibit.io","https://bsc-rpc.publicnode.com"];
+const TAGS = ["Reliable","Builder","Helpful","Trader","Creator","Friendly"];
+const ABI = [
+  "function vouch(address to,uint8 tag,string note)",
+  "function memberCount() view returns (uint256)",
+  "function vouchCount() view returns (uint256)",
+  "function profile(address) view returns (bool agent,uint256 received,uint256 given,uint256 mutualVouches,uint256 score,uint256[6] tags)",
+  "function getVouch(address from,address to) view returns (bool active,uint8 tag,uint64 time,string note)",
+  "function vouchesLeftToday(address) view returns (uint256)",
+  "function getMembers(uint256 offset,uint256 limit) view returns (address[])",
+  "function recentVouches(uint256 limit) view returns (tuple(address from,address to,uint8 tag,uint64 time)[])",
+  "function scoreOf(address) view returns (uint256)"
+];
+const $ = id => document.getElementById(id);
+const qs = new URLSearchParams(location.search);
+const addrParam = qs.get("c");
+const ADDR = (addrParam && ethers.isAddress(addrParam)) ? ethers.getAddress(addrParam) : CONTRACT;
+const iface = new ethers.Interface(ABI);
+const short = a => a.slice(0,6) + "…" + a.slice(-4);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+TAGS.forEach((t,i) => { const o = document.createElement("option"); o.value = i; o.textContent = t; $("vTag").appendChild(o); });
+if (qs.get("to") && ethers.isAddress(qs.get("to"))) $("vTo").value = qs.get("to");
+try { const f = localStorage.getItem("vn_from"); if (f) $("vFrom").value = f; } catch(e) {}
+$("cLinkScan").textContent = ADDR; $("cLinkScan").href = "https://bscscan.com/address/" + ADDR;
+
+let contract;
+async function connect() {
+  for (const url of RPCS) {
+    try {
+      const p = new ethers.JsonRpcProvider(url, 56, { staticNetwork: true });
+      const c = new ethers.Contract(ADDR, ABI, p);
+      await c.memberCount();
+      return c;
+    } catch (e) {}
+  }
+  throw new Error("Could not load");
+}
+
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch (e) {
+    const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select();
+    let ok = false; try { ok = document.execCommand("copy"); } catch (_) {} t.remove(); return ok;
+  }
+}
+
+async function loadStats() {
+  try {
+    contract = await connect();
+    const [m, v] = await Promise.all([contract.memberCount(), contract.vouchCount()]);
+    $("sMembers").textContent = m.toString(); $("sVouches").textContent = v.toString();
+    loadFeed(); loadBoard(Number(m));
+  } catch (e) {
+    $("sMembers").textContent = "–"; $("sVouches").textContent = "–";
+    $("feed").textContent = $("lb").textContent = "Could not load the contract. Check the CONTRACT address.";
+  }
+}
+
+async function loadFeed() {
+  const r = await contract.recentVouches(15);
+  if (!r.length) { $("feed").innerHTML = "No vouches yet. Be the first!"; return; }
+  $("feed").innerHTML = "<table>" + r.map(x =>
+    `<tr><td class="addr">${short(x.from)} → <a href="#" data-a="${x.to}">${short(x.to)}</a></td><td><span class="pill">${TAGS[x.tag]}</span></td><td class="muted">${new Date(Number(x.time)*1000).toLocaleDateString()}</td></tr>`
+  ).join("") + "</table>";
+}
+
+async function loadBoard(n) {
+  if (!n) { $("lb").innerHTML = "No members yet."; return; }
+  const list = await contract.getMembers(0, Math.min(n, 300));
+  const scores = await Promise.all(list.map(a => contract.scoreOf(a)));
+  const top = list.map((a,i) => ({a, s: Number(scores[i])})).sort((x,y) => y.s - x.s).slice(0, 10);
+  $("lb").innerHTML = "<table><tr><th>#</th><th>Agent</th><th>Score</th></tr>" + top.map((x,i) =>
+    `<tr><td>${i+1}</td><td class="addr"><a href="#" data-a="${x.a}">${short(x.a)}</a></td><td>${x.s}</td></tr>`).join("") + "</table>";
+}
+
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-a]");
+  if (a) { e.preventDefault(); $("cAddr").value = a.dataset.a; check(); $("cAddr").scrollIntoView({behavior:"smooth", block:"center"}); }
+});
+
+async function check() {
+  const a = $("cAddr").value.trim();
+  if (!ethers.isAddress(a)) { $("cOut").innerHTML = '<span class="bad">Enter a valid 0x address.</span>'; return; }
+  if (!contract) { $("cOut").innerHTML = '<span class="bad">Could not load the contract.</span>'; return; }
+  $("cOut").textContent = "Loading…";
+  try {
+    const p = await contract.profile(a);
+    const tags = TAGS.map((t,i) => Number(p.tags[i]) ? `<span class="pill">${t} × ${p.tags[i]}</span>` : "").join("") || '<span class="muted">No tags yet</span>';
+    $("cOut").innerHTML = `
+      <div>${p.agent ? '<span class="ok">✔ Holds an Agent ID</span>' : '<span class="bad">✖ No Agent ID on this address</span>'}</div>
+      <div style="font-size:24px;margin:6px 0"><b>${p.score}</b> <span class="muted" style="font-size:14px">reputation</span></div>
+      <div class="muted">Received ${p.received} · Given ${p.given} · Mutual ${p.mutualVouches}</div>
+      <div style="margin-top:6px">${tags}</div>`;
+  } catch (e) { $("cOut").innerHTML = '<span class="bad">Could not read this address.</span>'; }
+}
+$("cBtn").onclick = check;
+
+$("cLink").onclick = async () => {
+  const a = $("cAddr").value.trim();
+  if (!ethers.isAddress(a)) { $("cOut").innerHTML = '<span class="bad">Enter your Agentic Wallet address first.</span>'; return; }
+  const u = new URL(location.href); u.search = ""; u.hash = "";
+  if (ADDR !== CONTRACT) u.searchParams.set("c", ADDR);
+  u.searchParams.set("to", ethers.getAddress(a));
+  const ok = await copy(u.toString());
+  $("cOut").innerHTML = (ok ? '<span class="ok">Copied!</span> ' : "") + `<div class="addr" style="margin-top:6px;word-break:break-all">${esc(u.toString())}</div>`;
+};
+
+$("vBuild").onclick = async () => {
+  const from = $("vFrom").value.trim(), to = $("vTo").value.trim(), tag = Number($("vTag").value), note = $("vNote").value.trim();
+  const msg = $("vMsg"); msg.className = "bad";
+  if (!ethers.isAddress(from)) return msg.textContent = "Enter your Agentic Wallet address.";
+  if (!ethers.isAddress(to)) return msg.textContent = "Enter the address you want to vouch for.";
+  if (from.toLowerCase() === to.toLowerCase()) return msg.textContent = "You can't vouch for yourself.";
+  if (new TextEncoder().encode(note).length > 140) return msg.textContent = "Note is longer than 140 bytes.";
+  try { localStorage.setItem("vn_from", from); } catch(e) {}
+  if (contract) {
+    try {
+      const [pf, pt, v, left] = await Promise.all([contract.profile(from), contract.profile(to), contract.getVouch(from, to), contract.vouchesLeftToday(from)]);
+      if (!pf.agent) return msg.textContent = "Your address has no Agent ID. Use your Agentic Wallet address.";
+      if (!pt.agent) return msg.textContent = "That address has no Agent ID.";
+      if (v.active) return msg.textContent = "You already vouched for this agent.";
+      if (left == 0n) return msg.textContent = "Daily limit reached (10 per day). Try again after 07:00 Vietnam time.";
+    } catch (e) {}
+  }
+  const data = iface.encodeFunctionData("vouch", [ethers.getAddress(to), tag, note]);
+  const text =
+`Please vouch for an agent on VouchNet using my Binance Agentic Wallet on BNB Smart Chain.
+
+Contract: ${ADDR} (VouchNet, verified on BscScan)
+Function: vouch(to=${ethers.getAddress(to)}, tag=${tag} "${TAGS[tag]}", note="${note}")
+Value: 0 BNB (only gas)
+
+Steps:
+1. baw wallet settings --json   (check devMode.enabled=true)
+2. baw contract-call preview --binanceChainId 56 --from ${ethers.getAddress(from)} --to ${ADDR} --value 0 --inputData ${data} --json
+3. Show me the preview and risks, then wait for my "confirm".
+4. After I confirm: baw contract-call execute --requestId <requestId from step 2> --json`;
+  $("vOut").textContent = text; $("vOut").hidden = false;
+  const ok = await copy(text);
+  msg.className = "ok"; msg.textContent = ok ? "Copied! Paste it to your AI agent, check the preview, then reply confirm." : "Copy the text below and paste it to your AI agent.";
+};
+
+loadStats();
+</script>
+</body>
+</html>
